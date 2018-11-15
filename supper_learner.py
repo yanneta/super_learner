@@ -1,5 +1,6 @@
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import Ridge, RidgeCV, Lasso, LassoCV
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.linear_model import Ridge, RidgeCV, Lasso, LassoCV, ElasticNetCV
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.metrics import r2_score
 from sklearn.preprocessing import StandardScaler
@@ -24,44 +25,78 @@ import random
 from pmlb import fetch_data, regression_dataset_names
 
 
+alphas=[1e-4, 1e-3, 1e-2, 1e-1, 1, 2, 4, 8, 16, 32, 64, 132]
 def other_scores(train_X, test_X, train_y, test_y):
-    alphas=[1e-4, 1e-3, 1e-2, 1e-1, 1, 2, 4, 8, 16, 32, 64]
+    rf = RandomForestRegressor(n_estimators=10, max_depth=15, n_jobs=10)
+    ridge  = RidgeCV(cv=5, alphas=alphas)
+    lasso = ElasticNetCV(cv=5, random_state=0, l1_ratio=1)
+    dt = DecisionTreeRegressor(min_samples_leaf=10)
     
-    rf_reg = RandomForestRegressor(n_estimators=10, max_depth=15, n_jobs=10)
-    ridge_reg = RidgeCV(alphas=alphas)
-    lasso_reg = LassoCV(cv=5, random_state=0)
-
     scaler = StandardScaler()
     train_X = scaler.fit_transform(train_X)
     test_X = scaler.transform(test_X)
     
-    rf_reg.fit(train_X, train_y)
-    lasso_reg.fit(train_X, train_y)
-    ridge_reg.fit(train_X, train_y)
-
-    return rf_reg.score(test_X, test_y), ridge_reg.score(test_X, test_y), lasso_reg.score(test_X, test_y)
-
+    rf.fit(train_X, train_y)
+    lasso.fit(train_X, train_y)
+    ridge.fit(train_X, train_y)
+    dt.fit(train_X, train_y)
+    scores = [x.score(test_X, test_y) for x in [rf, ridge, lasso, dt]]
+    return scores
 
 def random_assignments(train_X, K=6):
     data = {'index': range(len(train_X)), 'group':  np.random.choice(K, len(train_X)) }
     df = pd.DataFrame(data)
     return df
 
-def fit_K_models(train_X, train_y, groups, alpha, K=6):
+
+alphas=[1e-4, 1e-3, 1e-2, 1e-1, 1, 2, 4, 8, 16, 32, 64, 132]
+class BaseModel:
+    def __init__(self, model_type):
+        self.model_type = model_type
+        self.model = self.create_model()
+        if model_type not in range(1,7):
+            print("model_type should be in the interval [1, 6]")
+
+    def create_model(self):
+        method_name = 'model_' + str(self.model_type)
+        method = getattr(self, method_name, lambda: "nothing")
+        return method()
+
+    def model_1(self):
+        return RidgeCV(cv=5, alphas=alphas)
+
+    def model_2(self):
+        return ElasticNetCV(cv=5, random_state=0, l1_ratio=0.5)
+
+    def model_3(self):
+        return ElasticNetCV(cv=5, random_state=0, l1_ratio=1)
+
+    def model_4(self):
+        return DecisionTreeRegressor(max_depth=1)
+
+    def model_5(self):
+        return DecisionTreeRegressor(max_depth=3)
+
+    def model_6(self):
+        return DecisionTreeRegressor(max_depth=5)
+
+
+def fit_K_models(train_X, train_y, groups, model_types, K=6):
     models = []
     for k in range(K):
         ind = groups[groups["group"] == k].index.values
         X = train_X[ind]
         y = train_y[ind]
-        ridge_reg = Ridge(alpha=alpha)
-        ridge_reg.fit(X, y)
-        models.append(ridge_reg)
+        if len(ind) > 10:
+            base_model = BaseModel(model_types[k])
+            base_model.model.fit(X, y)
+            models.append(base_model)
     return models
 
 def compute_K_model_loss(train_X, train_y, models):
     L = []
     for i in range(len(models)):
-        loss = (models[i].predict(train_X) - train_y)**2
+        loss = (models[i].model.predict(train_X) - train_y)**2
         L.append(loss)
     L = np.array(L)
     return L
@@ -144,10 +179,15 @@ def reasign_points(train_X, model):
     data = {'index': range(len(train_X)), 'group': pred.cpu().numpy()  }
     return pd.DataFrame(data) 
 
-def relabel_groups(groups):
-    old2new = {x:i for i,x in enumerate(groups.group.unique())}
+
+def relabel_groups(groups, models):
+    unique_models = groups.group.unique()
+    old2new = {x:i for i,x in enumerate(unique_models)}
+    ratios = []
+    model_types = [models[i].model_type for i in unique_models]
     groups.group = np.array([old2new[x] for x in groups.group.values])
-    return groups
+    return groups, model_types
+
 
 def compute_loss(X, y, oracle, models):
     x = torch.tensor(X).float()
@@ -160,7 +200,7 @@ def compute_loss(X, y, oracle, models):
         xx = x[ass==i]
         yy = y[ass==i]
         if len(xx) > 0:
-            pred = models[i].predict(xx.cpu().numpy())
+            pred = models[i].model.predict(xx.cpu().numpy())
             preds.append(pred)
             ys.append(yy.cpu().numpy())
     preds = np.hstack(preds)
@@ -183,13 +223,20 @@ class OracleDataset(Dataset):
         return self.X[idx], self.y[idx], self.w[idx]
 
 
+def compute_single_loss(X, y, model):
+    pred = model.model.predict(X)
+    r2 = r2_score(y, pred)
+    res = (y - pred)**2
+    return res.mean(), r2
+
 #############################
 # Main loop
 ############################
-alphas=[1e-4, 1e-3, 1e-2, 1e-1, 1, 2, 4, 8, 16, 32, 64]
 Hidden=100
 list_dataset = []
 learning_rate = 0.01
+model_str = ["RF", "Ridge", "Lasso", "Cart"]
+
 
 for dataset in regression_dataset_names:
     X, y = fetch_data(dataset, return_X_y=True, local_cache_dir='/data2/yinterian/pmlb/')
@@ -220,10 +267,21 @@ for dataset in list_dataset:
     best_train_r2 = None
     best_K = None
     best_test_r2 = None
+    model_types = range(1,7)
     for i in range(10):
         train_loss = None
         print("Iteration %d K is %d" % (i+1, K))
-        models = fit_K_models(train_X, train_y, groups, alpha, K)
+        models = fit_K_models(train_X, train_y, groups, model_types, K)
+        K = len(models)
+        if K == 1:
+            models[0].model.fit(train_X, train_y)
+            train_loss, train_r2 = compute_single_loss(train_X, train_y, models[0])
+            test_loss, test_r2 = compute_single_loss(test_X, test_y, models[0])
+            if train_r2 >= best_train_r2:
+                best_train_r2 = train_r2
+                best_test_r2 = test_r2
+                best_K = K
+            break
         X_ext, y_ext, w_ext = create_extended_dataset(train_X, train_y, models)
         train_ds = OracleDataset(X_ext, y_ext, w_ext)
         train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
@@ -231,8 +289,7 @@ for dataset in list_dataset:
         train_model(model, train_dl, K, learning_rate, N_iter)
         groups = reasign_points(train_X, model)
         if len(groups.group.unique()) < K:
-            K = len(groups.group.unique()) 
-            groups = relabel_groups(groups)
+            groups, model_types = relabel_groups(groups, models)
         train_loss, train_r2 = compute_loss(train_X, train_y, model, models)
         test_loss, test_r2 = compute_loss(test_X, test_y, model, models)
         print("loss", train_loss, test_loss)
@@ -247,8 +304,10 @@ for dataset in list_dataset:
             print("K", K)
             break
 
-    r2_rf, r2_ridge, r2_lasso = other_scores(train_X, test_X, train_y, test_y)
-    results = "dataset %s K %d ISL_r^2 %.4f RF_r^2 %.4f Ridge_r^2 %.4f Lasso_r^2 %.4f" %(dataset, best_K, best_test_r2, r2_rf, r2_ridge, r2_lasso)
+    scores = other_scores(train_X, test_X, train_y, test_y)
+    score_str = ["%s %.4f" % (s, score) for s,score in zip(model_str, scores)]
+    score_str = " ".join(score_str)
+    results = "dataset %s K %d ISL %.4f %s"  %(dataset, best_K, best_test_r2, score_str)
     print(results)
     f.write(results)
     f.write("\n")
