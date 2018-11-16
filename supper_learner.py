@@ -127,11 +127,19 @@ def create_extended_dataset(train_X, train_y, models):
     w_ext = np.concatenate(w_ext, axis=0)
     return X_ext, y_ext, w_ext
 
-def create_model(D_in, K, H=512):
-    model = torch.nn.Sequential(
-        torch.nn.Linear(D_in, H),
+def create_oracle_model(D_in, K, N):
+    """ Returns an oracle model
+    
+    The size of the hidden layer is a function of the
+    amount of training data
+    """
+    
+    H = int(2*np.log(N)**2)
+    model = nn.Sequential(
+        nn.Linear(D_in, H),
         nn.BatchNorm1d(H),
-        torch.nn.ReLU(),
+        nn.ReLU(),
+        nn.Dropout(p=0.2),
         torch.nn.Linear(H, K))
     return model
 
@@ -152,6 +160,7 @@ def train_model(model, train_dl, K, learning_rate = 0.01, epochs=100):
     beta = 1
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     KK = epochs//10
+    model.train()
     for t in range(epochs):
         total_loss = 0
         total = 0
@@ -190,6 +199,7 @@ def relabel_groups(groups, models):
 
 
 def compute_loss(X, y, oracle, models):
+    oracle.eval()
     x = torch.tensor(X).float()
     y = torch.tensor(y).float()
     y_hat = oracle(x.cuda())
@@ -232,10 +242,18 @@ def compute_single_loss(X, y, model):
 #############################
 # Main loop
 ############################
-Hidden=100
 list_dataset = []
-learning_rate = 0.01
 model_str = ["RF", "Ridge", "Lasso", "Cart"]
+
+
+lr_map = {"1028_SWD": 0.15, "1029_LEV" :0.15, "1030_ERA": 0.15, "1191_BNG_pbc": 0.02,
+         "1193_BNG_lowbwt": 0.1, "1196_BNG_pharynx": 0.015, "1199_BNG_echoMonths": 0.3,
+         "1203_BNG_pwLinear": 0.05, "1595_poker": 0.01, "1201_BNG_breastTumor": 0.05, "197_cpu_act": 0.2,
+         "201_pol": 0.15, "215_2dplanes": 0.1, "218_house_8L": 0.05, "225_puma8NH": 0.15,
+         "227_cpu_small":0.15, "294_satellite_image": 0.15, "344_mv": 0.1,
+          "4544_GeographicalOriginalofMusic": 0.15, "503_wind": 0.1, "529_pollen": 0.1,
+         "537_houses": 0.15, "562_cpu_small": 0.15, "564_fried": 0.1, "573_cpu_act": 0.15,
+         "574_house_16H": 0.15}
 
 
 for dataset in regression_dataset_names:
@@ -244,17 +262,13 @@ for dataset in regression_dataset_names:
         list_dataset.append(dataset)
 f = open('out.log', 'w+')
 for dataset in list_dataset:
+    learning_rate = lr_map.get(dataset, 0.01)
     X, y = fetch_data(dataset, return_X_y=True, local_cache_dir='/data2/yinterian/pmlb/')
     train_X, test_X, train_y, test_y = train_test_split(X, y)
     scaler = StandardScaler()
     train_X = scaler.fit_transform(train_X)
     test_X = scaler.transform(test_X)
 
-    ridge_reg = RidgeCV(alphas=alphas)
-    ridge_reg.fit(train_X, train_y)
-    alpha = ridge_reg.alpha_
-
-    print(alpha) 
     K = 6
     groups = random_assignments(train_X, K)
 
@@ -285,7 +299,7 @@ for dataset in list_dataset:
         X_ext, y_ext, w_ext = create_extended_dataset(train_X, train_y, models)
         train_ds = OracleDataset(X_ext, y_ext, w_ext)
         train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-        model = create_model(train_X.shape[1], K, H=Hidden).cuda()
+        model = create_oracle_model(train_X.shape[1], K, N).cuda()
         train_model(model, train_dl, K, learning_rate, N_iter)
         groups = reasign_points(train_X, model)
         if len(groups.group.unique()) < K:
