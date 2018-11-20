@@ -81,6 +81,20 @@ class BaseModel:
         return DecisionTreeRegressor(max_depth=5)
 
 
+def fit_initial_K_models(train_X, train_y, model_types):
+    models = []
+    N = train_X.shape[0]
+    n = int(2.5*N/np.log(N))
+    for k in range(len(model_types)):
+        ind = np.random.choice(N, n, replace=False)
+        X = train_X[ind]
+        y = train_y[ind]
+        if len(ind) > 10:
+            base_model = BaseModel(model_types[k])
+            base_model.model.fit(X, y)
+            models.append(base_model)
+    return models
+
 def fit_K_models(train_X, train_y, groups, model_types, K=6):
     models = []
     for k in range(K):
@@ -100,7 +114,6 @@ def compute_K_model_loss(train_X, train_y, models):
         L.append(loss)
     L = np.array(L)
     return L
-
 
 def compute_weights(L, K):
     JI_K = inv(np.ones((K, K)) - np.identity(K))
@@ -243,7 +256,7 @@ def compute_single_loss(X, y, model):
 # Main loop
 ############################
 list_dataset = []
-model_str = ["RF", "Ridge", "Lasso", "Cart"]
+model_str = ["RF", "Ridge", "Lasso", "DT"]
 
 
 lr_map = {"1028_SWD": 0.15, "1029_LEV" :0.15, "1030_ERA": 0.15, "1191_BNG_pbc": 0.02,
@@ -255,16 +268,17 @@ lr_map = {"1028_SWD": 0.15, "1029_LEV" :0.15, "1030_ERA": 0.15, "1191_BNG_pbc": 
          "537_houses": 0.15, "562_cpu_small": 0.15, "564_fried": 0.1, "573_cpu_act": 0.15,
          "574_house_16H": 0.15}
 
+selected_datasets = ["1028_SWD", "1191_BNG_pbc", "1196_BNG_pharynx", "1199_BNG_echoMonths", "1201_BNG_breastTumor",
+        "1595_poker", "201_pol", "218_house_8L", "225_puma8NH", "294_satellite_image", "537_houses",
+        "564_fried", "573_cpu_act", "574_house_16H"]
 
-for dataset in regression_dataset_names:
-    X, y = fetch_data(dataset, return_X_y=True, local_cache_dir='/data2/yinterian/pmlb/')
-    if X.shape[0] >= 1000:
-        list_dataset.append(dataset)
+
 f = open('out.log', 'w+')
-for dataset in list_dataset[26:]:
+state = 1
+for dataset in selected_datasets:
     learning_rate = lr_map.get(dataset, 0.15)
     X, y = fetch_data(dataset, return_X_y=True, local_cache_dir='/data2/yinterian/pmlb/')
-    train_X, test_X, train_y, test_y = train_test_split(X, y, random_state=23)
+    train_X, test_X, train_y, test_y = train_test_split(X, y, random_state=state)
     scaler = StandardScaler()
     train_X = scaler.fit_transform(train_X)
     test_X = scaler.transform(test_X)
@@ -281,11 +295,17 @@ for dataset in list_dataset[26:]:
     best_train_r2 = None
     best_K = None
     best_test_r2 = None
-    model_types = range(1,7)
+    best_model_types = None
+    model_types = [x for x in range(1,7)]
+    model_types = model_types + model_types
+    K = len(model_types)
     for i in range(10):
         train_loss = None
         print("Iteration %d K is %d" % (i+1, K))
-        models = fit_K_models(train_X, train_y, groups, model_types, K)
+        if i == 0:
+            models = fit_initial_K_models(train_X, train_y, model_types)
+        else:
+            models = fit_K_models(train_X, train_y, groups, model_types, K)
         K = len(models)
         if K == 1:
             models[0].model.fit(train_X, train_y)
@@ -295,6 +315,7 @@ for dataset in list_dataset[26:]:
                 best_train_r2 = train_r2
                 best_test_r2 = test_r2
                 best_K = K
+                best_model_types = model_types
             break
         X_ext, y_ext, w_ext = create_extended_dataset(train_X, train_y, models)
         train_ds = OracleDataset(X_ext, y_ext, w_ext)
@@ -314,14 +335,10 @@ for dataset in list_dataset[26:]:
             best_train_r2 = train_r2
             best_test_r2 = test_r2
             best_K = K
-        if K == 1:
-            print("K", K)
-            break
-
-    scores = other_scores(train_X, test_X, train_y, test_y)
-    score_str = ["%s %.4f" % (s, score) for s,score in zip(model_str, scores)]
-    score_str = " ".join(score_str)
-    results = "dataset %s K %d ISL %.4f %s"  %(dataset, best_K, best_test_r2, score_str)
+            best_model_types = model_types
+   
+    model_types_str = " ".join([str(x) for x in best_model_types])
+    results = "dataset %s state %d ISL %.4f K %d model_types %s"  %(dataset, state, best_test_r2, best_K, model_types_str)
     print(results)
     f.write(results)
     f.write("\n")
