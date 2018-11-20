@@ -261,10 +261,10 @@ for dataset in regression_dataset_names:
     if X.shape[0] >= 1000:
         list_dataset.append(dataset)
 f = open('out.log', 'w+')
-for dataset in list_dataset:
-    learning_rate = lr_map.get(dataset, 0.01)
+for dataset in list_dataset[26:]:
+    learning_rate = lr_map.get(dataset, 0.15)
     X, y = fetch_data(dataset, return_X_y=True, local_cache_dir='/data2/yinterian/pmlb/')
-    train_X, test_X, train_y, test_y = train_test_split(X, y)
+    train_X, test_X, train_y, test_y = train_test_split(X, y, random_state=23)
     scaler = StandardScaler()
     train_X = scaler.fit_transform(train_X)
     test_X = scaler.transform(test_X)

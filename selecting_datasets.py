@@ -35,14 +35,16 @@ alphas=[1e-4, 1e-3, 1e-2, 1e-1, 1, 2, 4, 8, 16, 32, 64, 132]
 def other_scores(train_X, test_X, train_y, test_y):
     
     N = train_X.shape[1]
-    max_features = np.unique([int(x*N + 1) for x in np.linspace(0.01, 0.99, num = 5)])
-    grid = {'max_features': max_features}
-    rf = RandomForestRegressor(n_estimators=1000, n_jobs = 10)
+    max_depth = np.unique([int(x*N + 1) for x in np.linspace(0.01, 2, num = 5)])
+    grid = {'max_depth': max_depth}
+    rf = RandomForestRegressor(n_estimators=1000, max_features='sqrt', n_jobs = 10)
     rf_cv = GridSearchCV(estimator = rf, param_grid = grid, cv = 5, verbose=2,
                          n_jobs = 2)
     ridge  = RidgeCV(cv=5, alphas=alphas)
     lasso = ElasticNetCV(cv=5, random_state=0, l1_ratio=1)
     dt = DecisionTreeRegressor(min_samples_leaf=10)
+    dt_cv = GridSearchCV(estimator = dt, param_grid = grid, cv = 5, verbose=2,
+                         n_jobs = 20)
     
     scaler = StandardScaler()
     train_X = scaler.fit_transform(train_X)
@@ -51,11 +53,11 @@ def other_scores(train_X, test_X, train_y, test_y):
     rf_cv.fit(train_X, train_y)
     lasso.fit(train_X, train_y)
     ridge.fit(train_X, train_y)
-    dt.fit(train_X, train_y)
-    scores = [x.score(test_X, test_y) for x in [rf_cv, ridge, lasso, dt]]
+    dt_cv.fit(train_X, train_y)
+    scores = [x.score(test_X, test_y) for x in [rf_cv, ridge, lasso, dt_cv]]
     return scores
 
-model_str = ["RF", "Ridge", "Lasso", "Cart"]
+model_str = ["RF", "Ridge", "Lasso", "DT"]
 
 f = open('comparison.log', 'w+')
 for state in range(1,10):
@@ -67,6 +69,7 @@ for state in range(1,10):
         test_X = scaler.transform(test_X)
         scores = other_scores(train_X, test_X, train_y, test_y)
         score_str = ["%s %.4f" % (s, score) for s,score in zip(model_str, scores)]
+        score_str = " ".join(score_str)
         results = "dataset %s state %d %s"  %(dataset, state, score_str)
         f.write(results)
         f.write("\n")
