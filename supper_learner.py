@@ -18,30 +18,10 @@ from torch.autograd import Variable
 import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision import models
 import random
 
 
 from pmlb import fetch_data, regression_dataset_names
-
-
-alphas=[1e-4, 1e-3, 1e-2, 1e-1, 1, 2, 4, 8, 16, 32, 64, 132]
-def other_scores(train_X, test_X, train_y, test_y):
-    rf = RandomForestRegressor(n_estimators=10, max_depth=15, n_jobs=10)
-    ridge  = RidgeCV(cv=5, alphas=alphas)
-    lasso = ElasticNetCV(cv=5, random_state=0, l1_ratio=1)
-    dt = DecisionTreeRegressor(min_samples_leaf=10)
-    
-    scaler = StandardScaler()
-    train_X = scaler.fit_transform(train_X)
-    test_X = scaler.transform(test_X)
-    
-    rf.fit(train_X, train_y)
-    lasso.fit(train_X, train_y)
-    ridge.fit(train_X, train_y)
-    dt.fit(train_X, train_y)
-    scores = [x.score(test_X, test_y) for x in [rf, ridge, lasso, dt]]
-    return scores
 
 def random_assignments(train_X, K=6):
     data = {'index': range(len(train_X)), 'group':  np.random.choice(K, len(train_X)) }
@@ -164,7 +144,7 @@ def softmax_loss(beta, f_hat, y, w):
     return loss.mean()
 
 def bounded_loss(beta, y_hat, y , w):
-    y_hat = beta*y_hat
+    #y_hat = beta*y_hat
     y_hat = F.softmax(y_hat, dim=1)
     loss = (y*(1-y_hat)).sum(dim=1)
     return (w*loss).mean()
@@ -172,7 +152,7 @@ def bounded_loss(beta, y_hat, y , w):
 def train_model(model, train_dl, K, learning_rate = 0.01, epochs=100):
     beta = 1
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    KK = epochs//10
+    KK = epochs//10 + 1
     model.train()
     for t in range(epochs):
         total_loss = 0
@@ -205,10 +185,9 @@ def reasign_points(train_X, model):
 def relabel_groups(groups, models):
     unique_models = groups.group.unique()
     old2new = {x:i for i,x in enumerate(unique_models)}
-    ratios = []
-    model_types = [models[i].model_type for i in unique_models]
+    model_subset = [models[i] for i in unique_models]
     groups.group = np.array([old2new[x] for x in groups.group.values])
-    return groups, model_types
+    return groups, model_subset, [m.model_type for m in model_subset]
 
 
 def compute_loss(X, y, oracle, models):
@@ -219,15 +198,21 @@ def compute_loss(X, y, oracle, models):
     _, ass = torch.max(y_hat, 1)
     preds = []
     ys = []
+    k = 0
     for i in range(len(models)):
         xx = x[ass==i]
         yy = y[ass==i]
         if len(xx) > 0:
+            k =+1
             pred = models[i].model.predict(xx.cpu().numpy())
             preds.append(pred)
             ys.append(yy.cpu().numpy())
-    preds = np.hstack(preds)
-    ys = np.hstack(ys)
+
+    if k==1:
+        preds, ys = preds[0], ys[0]
+    else:
+        preds = np.hstack(preds)
+        ys = np.hstack(ys)
     r2 = r2_score(ys, preds)
     res = (ys - preds)**2
     return res.mean(), r2
@@ -284,10 +269,11 @@ lr_map = {"1028_SWD": 0.15, "1029_LEV" :0.15, "1030_ERA": 0.15, "1191_BNG_pbc": 
          "537_houses": 0.15, "562_cpu_small": 0.15, "564_fried": 0.1, "573_cpu_act": 0.15,
          "574_house_16H": 0.15}
 
-selected_datasets = ["1028_SWD", "1191_BNG_pbc", "1196_BNG_pharynx", "1199_BNG_echoMonths", "1201_BNG_breastTumor",
+#"1191_BNG_pbc", too expensive, leaving outside for now
+# "1196_BNG_pharynx"
+selected_datasets = ["1028_SWD", "1199_BNG_echoMonths", "1201_BNG_breastTumor",
         "1595_poker", "201_pol", "218_house_8L", "225_puma8NH", "294_satellite_image", "537_houses",
         "564_fried", "573_cpu_act", "574_house_16H"]
-
 
 def main_loop(state):
     for dataset in selected_datasets:
@@ -305,25 +291,19 @@ def main_loop(state):
         best_oracle = None
         best_models = [best_model] 
 
-
         K = 6
         groups = random_assignments(train_X, K)
 
         batch_size = 100000
         # number of iterations depends on the number of training points
         N = train_X.shape[0]
-        N_iter = int(10000/np.log(N)**2)
+        N_iter = int(3000/np.log(N)**2)
         print("Number of training points %d, number iterations %d" % (N, N_iter))
 
-        best_train_r2 = None
-        best_K = None
-        best_test_r2 = None
-        best_model_types = None
         model_types = [x for x in range(1,7)]
         model_types = model_types + model_types
         K = len(model_types)
         for i in range(10):
-            train_loss = None
             print("Iteration %d K is %d" % (i+1, K))
             if i == 0:
                 models = fit_initial_K_models(train_X, train_y, model_types)
@@ -331,43 +311,46 @@ def main_loop(state):
                 models = fit_K_models(train_X, train_y, groups, model_types, K)
             K = len(models)
             if K == 1:
-                models[0].model.fit(train_X, train_y)
-                train_loss, train_r2 = compute_single_loss(train_X, train_y, models[0])
-                test_loss, test_r2 = compute_single_loss(test_X, test_y, models[0])
-                if train_r2 >= best_train_r2:
-                    best_train_r2 = train_r2
-                    best_test_r2 = test_r2
-                    best_K = K
-                    best_model_types = model_types
                 break
             X_ext, y_ext, w_ext = create_extended_dataset(train_X, train_y, models)
             train_ds = OracleDataset(X_ext, y_ext, w_ext)
             train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-            model = create_oracle_model(train_X.shape[1], K, N).cuda()
-            train_model(model, train_dl, K, learning_rate, N_iter)
-            groups = reasign_points(train_X, model)
+            oracle = create_oracle_model(train_X.shape[1], K, N).cuda()
+            train_model(oracle, train_dl, K, learning_rate, N_iter)
+            
+            groups = reasign_points(train_X, oracle)
+            if len(groups.group.unique()) == 1: break
+            
+            train_loss, train_r2 = compute_loss(train_X, train_y, oracle, models)
+            valid_loss, valid_r2 = compute_loss(valid_X, valid_y, oracle, models)
+
             if len(groups.group.unique()) < K:
-                groups, model_types = relabel_groups(groups, models)
-            train_loss, train_r2 = compute_loss(train_X, train_y, model, models)
-            test_loss, test_r2 = compute_loss(test_X, test_y, model, models)
-            print("loss", train_loss, test_loss)
-            print("R^2", train_r2, test_r2)
-            if best_train_r2 == None:
+                groups, models, model_types = relabel_groups(groups, models)
+                K = len(groups.group.unique())
+                print(len(models), len(model_types), K)
+
+            print("train loss %.3f valid loss %.3f", train_loss, valid_loss)
+            print("train R^2 %.3f valid R^2 %.3f", train_r2, valid_r2)
+            if valid_r2 >= best_valid_r2:
                 best_train_r2 = train_r2
-            if train_r2 >= best_train_r2:
-                best_train_r2 = train_r2
-                best_test_r2 = test_r2
+                best_valid_r2 = valid_r2
                 best_K = K
+                best_models = models
                 best_model_types = model_types
-   
-        model_types_str = " ".join([str(x) for x in best_model_types])
-        results = "dataset %s state %d ISL %.4f K %d model_types %s"  %(dataset, state, best_test_r2, best_K, model_types_str)
+                best_oracle = oracle
+  
+        if len(best_models) == 1:
+            best_test_r2 = best_models[0].score(test_X, test_y)
+        else:
+            test_loss, best_test_r2 = compute_loss(test_X, test_y, best_oracle, best_models)
+        results = "dataset %s state %d K %d test ISL %.3f valid ISL %.3f model_types %s" % (
+                dataset, state, len(best_models), best_valid_r2, best_test_r2, str(best_model_types))
         print(results)
         f.write(results)
-        f.write("\n")
+        f.write('\n')
         f.flush()
 
 f = open('out.log', 'w+')
-for state in range(4, 11):
+for state in range(1, 11):
     main_loop(state)
 f.close()
