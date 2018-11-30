@@ -126,8 +126,7 @@ def create_oracle_model(D_in, K, N):
     The size of the hidden layer is a function of the
     amount of training data
     """
-    
-    H = int(2*np.log(N)**2)
+    H = np.minimum(int(2*np.log(N)**2), 150) 
     model = nn.Sequential(
         nn.Linear(D_in, H),
         nn.BatchNorm1d(H),
@@ -172,7 +171,7 @@ def train_model(model, train_dl, K, learning_rate = 0.01, epochs=100):
             optimizer.step()
             total_loss += loss.item()*y.size(0)
             total += y.size(0)
-        if t % KK == 0: print(total_loss/total)
+        if t % KK == 0: print("epoch %d loss %.4f" % (t, total_loss/total))
 
 def reasign_points(train_X, model):
     x = torch.tensor(train_X).float()
@@ -271,7 +270,7 @@ lr_map = {"1028_SWD": 0.15, "1029_LEV" :0.15, "1030_ERA": 0.15, "1191_BNG_pbc": 
 
 #"1191_BNG_pbc", too expensive, leaving outside for now
 # "1196_BNG_pharynx"
-selected_datasets = ["1028_SWD", "1199_BNG_echoMonths", "1201_BNG_breastTumor",
+selected_datasets = ["1028_SWD", "1029_LEV", "1199_BNG_echoMonths", "1201_BNG_breastTumor",
         "1595_poker", "201_pol", "218_house_8L", "225_puma8NH", "294_satellite_image", "537_houses",
         "564_fried", "573_cpu_act", "574_house_16H"]
 
@@ -287,6 +286,7 @@ def main_loop(state):
         valid_X = scaler.transform(valid_X)
 
         best_valid_r2, best_model, best_model_types = baseline_models(train_X, train_y, valid_X, valid_y)
+        best_test_r2 = best_model.score(test_X, test_y)
         print("best valid R^2 %.3f best model type %d" % (best_valid_r2, best_model_types[0]))
         best_oracle = None
         best_models = [best_model] 
@@ -297,7 +297,7 @@ def main_loop(state):
         batch_size = 100000
         # number of iterations depends on the number of training points
         N = train_X.shape[0]
-        N_iter = int(3000/np.log(N)**2)
+        N_iter = int(2500/np.log(N)**2)
         print("Number of training points %d, number iterations %d" % (N, N_iter))
 
         model_types = [x for x in range(1,7)]
@@ -323,6 +323,7 @@ def main_loop(state):
             
             train_loss, train_r2 = compute_loss(train_X, train_y, oracle, models)
             valid_loss, valid_r2 = compute_loss(valid_X, valid_y, oracle, models)
+            test_loss, test_r2 = compute_loss(test_X, test_y, oracle, models)
 
             if len(groups.group.unique()) < K:
                 groups, models, model_types = relabel_groups(groups, models)
@@ -337,12 +338,8 @@ def main_loop(state):
                 best_K = K
                 best_models = models
                 best_model_types = model_types
-                best_oracle = oracle
-  
-        if len(best_models) == 1:
-            best_test_r2 = best_models[0].score(test_X, test_y)
-        else:
-            test_loss, best_test_r2 = compute_loss(test_X, test_y, best_oracle, best_models)
+                best_test_r2 = test_r2 
+        
         results = "dataset %s state %d K %d test ISL %.3f valid ISL %.3f model_types %s" % (
                 dataset, state, len(best_models), best_valid_r2, best_test_r2, str(best_model_types))
         print(results)
@@ -350,7 +347,7 @@ def main_loop(state):
         f.write('\n')
         f.flush()
 
-f = open('out.log', 'w+')
+f = open('out2.5kH150.log', 'w+')
 for state in range(1, 11):
     main_loop(state)
 f.close()
