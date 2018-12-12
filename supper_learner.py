@@ -274,6 +274,8 @@ selected_datasets = ["1028_SWD", "1029_LEV", "1199_BNG_echoMonths", "1201_BNG_br
         "1595_poker", "201_pol", "218_house_8L", "225_puma8NH", "294_satellite_image", "537_houses",
         "564_fried", "573_cpu_act", "574_house_16H"]
 
+selected_datasets = ["1191_BNG_pbc", "1196_BNG_pharynx"]
+
 def main_loop(state):
     for dataset in selected_datasets:
         learning_rate = lr_map.get(dataset, 0.15)
@@ -297,33 +299,41 @@ def main_loop(state):
         batch_size = 100000
         # number of iterations depends on the number of training points
         N = train_X.shape[0]
-        N_iter = int(2500/np.log(N)**2)
+        N_iter = int(3000/np.log(N)**2)
         print("Number of training points %d, number iterations %d" % (N, N_iter))
 
         model_types = [x for x in range(1,7)]
-        model_types = model_types + model_types
+        model_types = model_types + [1,2,3,6,6,6]
         K = len(model_types)
-        for i in range(10):
+        INIT_FLAG = True
+        for i in range(16):
+            if i == 8: INIT_FLAG = True
             print("Iteration %d K is %d" % (i+1, K))
-            if i == 0:
+            if INIT_FLAG:
+                model_types = [x for x in range(1,7)] + [1,3,6,6,6]
                 models = fit_initial_K_models(train_X, train_y, model_types)
+                INIT_FLAG = False
             else:
                 models = fit_K_models(train_X, train_y, groups, model_types, K)
             K = len(models)
             if K == 1:
-                break
-            X_ext, y_ext, w_ext = create_extended_dataset(train_X, train_y, models)
-            train_ds = OracleDataset(X_ext, y_ext, w_ext)
-            train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-            oracle = create_oracle_model(train_X.shape[1], K, N).cuda()
-            train_model(oracle, train_dl, K, learning_rate, N_iter)
+                INIT_FLAG = True
+
+            if not INIT_FLAG:
+                X_ext, y_ext, w_ext = create_extended_dataset(train_X, train_y, models)
+                train_ds = OracleDataset(X_ext, y_ext, w_ext)
+                train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+                oracle = create_oracle_model(train_X.shape[1], K, N).cuda()
+                train_model(oracle, train_dl, K, learning_rate, N_iter)
             
             groups = reasign_points(train_X, oracle)
-            if len(groups.group.unique()) == 1: break
+            if len(groups.group.unique()) == 1:
+                INIT_FLAG = True
             
-            train_loss, train_r2 = compute_loss(train_X, train_y, oracle, models)
-            valid_loss, valid_r2 = compute_loss(valid_X, valid_y, oracle, models)
-            test_loss, test_r2 = compute_loss(test_X, test_y, oracle, models)
+            if not INIT_FLAG:
+                train_loss, train_r2 = compute_loss(train_X, train_y, oracle, models)
+                valid_loss, valid_r2 = compute_loss(valid_X, valid_y, oracle, models)
+                test_loss, test_r2 = compute_loss(test_X, test_y, oracle, models)
 
             if len(groups.group.unique()) < K:
                 groups, models, model_types = relabel_groups(groups, models)
@@ -341,13 +351,13 @@ def main_loop(state):
                 best_test_r2 = test_r2 
         
         results = "dataset %s state %d K %d test ISL %.3f valid ISL %.3f model_types %s" % (
-                dataset, state, len(best_models), best_valid_r2, best_test_r2, str(best_model_types))
+                dataset, state, len(best_models), best_test_r2, best_valid_r2, str(best_model_types))
         print(results)
         f.write(results)
         f.write('\n')
         f.flush()
 
-f = open('out2.5kH150.log', 'w+')
+f = open('out3kH150_666_re_init16_extra.log', 'w+')
 for state in range(1, 11):
     main_loop(state)
 f.close()
