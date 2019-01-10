@@ -52,13 +52,13 @@ class BaseModel:
         return ElasticNetCV(cv=5, random_state=0, l1_ratio=1)
 
     def model_4(self):
-        return DecisionTreeRegressor(max_depth=1)
+        return DecisionTreeRegressor(max_depth=4)
 
     def model_5(self):
-        return DecisionTreeRegressor(max_depth=3)
+        return DecisionTreeRegressor(max_depth=5)
 
     def model_6(self):
-        return DecisionTreeRegressor(max_depth=5)
+        return DecisionTreeRegressor(max_depth=6)
 
 
 def fit_initial_K_models(train_X, train_y, model_types):
@@ -104,21 +104,27 @@ def compute_weights(L, K):
     return np.array(W)
 
 def create_extended_dataset(train_X, train_y, models):
+    # sample to address overfitting
     K = len(models)
     N = train_X.shape[0]
-    L = compute_K_model_loss(train_X, train_y, models)
+    n = int(0.7*N)
+    idx = np.random.choice(N, n, replace=False)
+    X = train_X[idx]
+    Y = train_y[idx]
+    L = compute_K_model_loss(X, Y, models)
     W = compute_weights(L, K)
     X_ext = []
     y_ext = []
     w_ext = []
     for i in range(K):
-        X_ext.append(train_X.copy())
-        y_ext.append(i*np.ones(N))
+        X_ext.append(X.copy())
+        y_ext.append(i*np.ones(n))
         w_ext.append(W[:, i])
     X_ext = np.concatenate(X_ext, axis=0)
     y_ext = np.concatenate(y_ext, axis=0)
     w_ext = np.concatenate(w_ext, axis=0)
     return X_ext, y_ext, w_ext
+
 
 def create_oracle_model(D_in, K, N):
     """ Returns an oracle model
@@ -272,9 +278,7 @@ lr_map = {"1028_SWD": 0.15, "1029_LEV" :0.15, "1030_ERA": 0.15, "1191_BNG_pbc": 
 # "1196_BNG_pharynx"
 selected_datasets = ["1028_SWD", "1029_LEV", "1199_BNG_echoMonths", "1201_BNG_breastTumor",
         "1595_poker", "201_pol", "218_house_8L", "225_puma8NH", "294_satellite_image", "537_houses",
-        "564_fried", "573_cpu_act", "574_house_16H"]
-
-selected_datasets = ["1191_BNG_pbc", "1196_BNG_pharynx"]
+        "564_fried", "573_cpu_act", "574_house_16H", "1191_BNG_pbc", "1196_BNG_pharynx"]
 
 def main_loop(state):
     for dataset in selected_datasets:
@@ -303,14 +307,13 @@ def main_loop(state):
         print("Number of training points %d, number iterations %d" % (N, N_iter))
 
         model_types = [x for x in range(1,7)]
-        model_types = model_types + [1,2,3,6,6,6]
         K = len(model_types)
         INIT_FLAG = True
         for i in range(16):
             if i == 8: INIT_FLAG = True
             print("Iteration %d K is %d" % (i+1, K))
             if INIT_FLAG:
-                model_types = [x for x in range(1,7)] + [1,3,6,6,6]
+                model_types = [x for x in range(1,7)] + [1,3,6,6,6,6,6,6]
                 models = fit_initial_K_models(train_X, train_y, model_types)
                 INIT_FLAG = False
             else:
@@ -357,7 +360,7 @@ def main_loop(state):
         f.write('\n')
         f.flush()
 
-f = open('out3kH150_666_re_init16_extra.log', 'w+')
+f = open('out3kH150_6_sample_ext.log', 'w+')
 for state in range(1, 11):
     main_loop(state)
 f.close()
