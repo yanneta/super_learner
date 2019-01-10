@@ -52,19 +52,19 @@ class BaseModel:
         return ElasticNetCV(cv=5, random_state=0, l1_ratio=1)
 
     def model_4(self):
-        return DecisionTreeRegressor(max_depth=4)
+        return DecisionTreeRegressor(max_depth=3)
 
     def model_5(self):
-        return DecisionTreeRegressor(max_depth=5)
+        return DecisionTreeRegressor(max_depth=4)
 
     def model_6(self):
-        return DecisionTreeRegressor(max_depth=6)
+        return DecisionTreeRegressor(max_depth=5)
 
 
 def fit_initial_K_models(train_X, train_y, model_types):
     models = []
     N = train_X.shape[0]
-    n = int(2.5*N/np.log(N))
+    n = int(3*N/np.log(N))
     for k in range(len(model_types)):
         ind = np.random.choice(N, n, replace=False)
         X = train_X[ind]
@@ -75,15 +75,30 @@ def fit_initial_K_models(train_X, train_y, model_types):
             models.append(base_model)
     return models
 
-def fit_K_models(train_X, train_y, groups, model_types, K=6):
+
+def fit_K_models(train_X, train_y, oracle, models, K, p=0.8):
+    # sample to address overfitting 
+    N = train_X.shape[0]
+    ind = np.random.choice(N, int(p*N), replace=False)
+    X = train_X[ind]
+    y = train_y[ind]
+    # assigning points using oracle
+    # this will be modified 
+    groups = assign_points(X, oracle)
+                
+    if len(groups.group.unique()) < K:
+        groups, models = relabel_groups(groups, models)
+        K = len(groups.group.unique())
+        
+    model_types = [m.model_type for m in models]
     models = []
-    for k in range(K):
+    for k in range(len(model_types)):
         ind = groups[groups["group"] == k].index.values
-        X = train_X[ind]
-        y = train_y[ind]
+        X_k = X[ind]
+        y_k = y[ind]
         if len(ind) > 10:
             base_model = BaseModel(model_types[k])
-            base_model.model.fit(X, y)
+            base_model.model.fit(X_k, y_k)
             models.append(base_model)
     return models
 
@@ -103,11 +118,11 @@ def compute_weights(L, K):
         W.append(w_i)
     return np.array(W)
 
-def create_extended_dataset(train_X, train_y, models):
+def create_extended_dataset(train_X, train_y, models, p=0.7):
     # sample to address overfitting
     K = len(models)
     N = train_X.shape[0]
-    n = int(0.7*N)
+    n = int(p*N)
     idx = np.random.choice(N, n, replace=False)
     X = train_X[idx]
     Y = train_y[idx]
@@ -179,7 +194,7 @@ def train_model(model, train_dl, K, learning_rate = 0.01, epochs=100):
             total += y.size(0)
         if t % KK == 0: print("epoch %d loss %.4f" % (t, total_loss/total))
 
-def reasign_points(train_X, model):
+def assign_points(train_X, model):
     x = torch.tensor(train_X).float()
     y_hat = model(x.cuda())
     _, pred = torch.max(y_hat, 1)
@@ -192,7 +207,7 @@ def relabel_groups(groups, models):
     old2new = {x:i for i,x in enumerate(unique_models)}
     model_subset = [models[i] for i in unique_models]
     groups.group = np.array([old2new[x] for x in groups.group.values])
-    return groups, model_subset, [m.model_type for m in model_subset]
+    return groups, model_subset
 
 
 def compute_loss(X, y, oracle, models):
@@ -280,6 +295,9 @@ selected_datasets = ["1028_SWD", "1029_LEV", "1199_BNG_echoMonths", "1201_BNG_br
         "1595_poker", "201_pol", "218_house_8L", "225_puma8NH", "294_satellite_image", "537_houses",
         "564_fried", "573_cpu_act", "574_house_16H", "1191_BNG_pbc", "1196_BNG_pharynx"]
 
+selected_datasets = ["294_satellite_image", "201_pol", "1199_BNG_echoMonths", "1201_BNG_breastTumor", "218_house_8L",
+        "225_puma8NH", "537_houses", "564_fried", "573_cpu_act", "574_house_16H"]
+
 def main_loop(state):
     for dataset in selected_datasets:
         learning_rate = lr_map.get(dataset, 0.15)
@@ -297,9 +315,6 @@ def main_loop(state):
         best_oracle = None
         best_models = [best_model] 
 
-        K = 6
-        groups = random_assignments(train_X, K)
-
         batch_size = 100000
         # number of iterations depends on the number of training points
         N = train_X.shape[0]
@@ -310,38 +325,34 @@ def main_loop(state):
         K = len(model_types)
         INIT_FLAG = True
         for i in range(16):
-            if i == 8: INIT_FLAG = True
-            print("Iteration %d K is %d" % (i+1, K))
+            if i == 7: INIT_FLAG = True
+            
+            if not INIT_FLAG:
+                models = fit_K_models(train_X, train_y, oracle, models, K, p=0.9)
+                if len(models) == 1:
+                    INIT_FLAG = True  
+            
             if INIT_FLAG:
                 model_types = [x for x in range(1,7)] + [1,3,6,6,6,6,6,6]
                 models = fit_initial_K_models(train_X, train_y, model_types)
                 INIT_FLAG = False
-            else:
-                models = fit_K_models(train_X, train_y, groups, model_types, K)
+            
             K = len(models)
+            print("Iteration %d K is %d" % (i+1, K))
             if K == 1:
                 INIT_FLAG = True
 
             if not INIT_FLAG:
-                X_ext, y_ext, w_ext = create_extended_dataset(train_X, train_y, models)
+                X_ext, y_ext, w_ext = create_extended_dataset(train_X, train_y, models, p=0.7)
                 train_ds = OracleDataset(X_ext, y_ext, w_ext)
                 train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
                 oracle = create_oracle_model(train_X.shape[1], K, N).cuda()
                 train_model(oracle, train_dl, K, learning_rate, N_iter)
             
-            groups = reasign_points(train_X, oracle)
-            if len(groups.group.unique()) == 1:
-                INIT_FLAG = True
-            
             if not INIT_FLAG:
                 train_loss, train_r2 = compute_loss(train_X, train_y, oracle, models)
                 valid_loss, valid_r2 = compute_loss(valid_X, valid_y, oracle, models)
                 test_loss, test_r2 = compute_loss(test_X, test_y, oracle, models)
-
-            if len(groups.group.unique()) < K:
-                groups, models, model_types = relabel_groups(groups, models)
-                K = len(groups.group.unique())
-                print(len(models), len(model_types), K)
 
             print("train loss %.3f valid loss %.3f", train_loss, valid_loss)
             print("train R^2 %.3f valid R^2 %.3f", train_r2, valid_r2)
@@ -350,7 +361,7 @@ def main_loop(state):
                 best_valid_r2 = valid_r2
                 best_K = K
                 best_models = models
-                best_model_types = model_types
+                best_model_types = [m.model_type for m in models]
                 best_test_r2 = test_r2 
         
         results = "dataset %s state %d K %d test ISL %.3f valid ISL %.3f model_types %s" % (
