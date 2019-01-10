@@ -1,13 +1,3 @@
-
-# coding: utf-8
-
-# # Super Learner
-
-# ## Preliminary experiments
-
-# In[46]:
-
-
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge, RidgeCV, Lasso, LassoCV, ElasticNetCV
 from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
@@ -18,14 +8,6 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import seaborn as sb
 from numpy.linalg import inv
-
-
-# In[19]:
-
-
-get_ipython().run_line_magic('reload_ext', 'autoreload')
-get_ipython().run_line_magic('autoreload', '2')
-get_ipython().run_line_magic('matplotlib', 'inline')
 
 import pandas as pd
 import numpy as np
@@ -223,18 +205,12 @@ def create_oracle_model(D_in, K, N):
     return model
 
 
-# In[29]:
-
-
 def softmax_loss(beta, f_hat, y, w):
     y_hat = np.exp(beta*f_hat)
     den = (np.exp(beta*f_hat)).sum(axis=1)
     y_hat = np.array([y_hat[i]/den[i] for i in range(len(den))])
     loss = w*((y * (1- y_hat)).sum(axis=1))
     return loss.mean()
-
-
-# In[30]:
 
 
 def bounded_loss(beta, y_hat, y , w):
@@ -244,45 +220,10 @@ def bounded_loss(beta, y_hat, y , w):
     return (w*loss).mean()
 
 
-# In[31]:
-
-
-def train_model(model, train_dl, K, learning_rate = 0.01, epochs=100):
-    beta = 1
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    KK = epochs//10 + 1
-    model.train()
-    for t in range(epochs):
-        total_loss = 0
-        total = 0
-        for x, y, w in train_dl:
-            x = x.cuda().float()
-            y = y.cuda().long()
-            w = w.cuda().float()
-            y_onehot = torch.FloatTensor(y.shape[0], K).cuda()
-            y_onehot.zero_()
-            y_onehot = y_onehot.scatter_(1, y.unsqueeze(1), 1)
-            y_hat = model(x)
-            loss = bounded_loss(beta, y_hat, y_onehot , w)
-       
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()*y.size(0)
-            total += y.size(0)
-        if t % KK == 0: print("epoch %d loss %.4f" % (t, total_loss/total))
-
-
-# In[49]:
-
-
 def assign_points(X, model):
     y_hat = model.predict(X).astype(int)
     data = {'index': range(len(X)), 'group': y_hat}
     return pd.DataFrame(data)
-
-
-# In[33]:
 
 
 def relabel_groups(groups, models):
@@ -429,7 +370,7 @@ selected_datasets = ["294_satellite_image", "201_pol", "1199_BNG_echoMonths", "1
 
 f = open('out_trees.log', 'w+')
 for state in range(1, 11):
-    main_loop(state)
+    main_loop(state, selected_datasets)
 f.close()
 
 

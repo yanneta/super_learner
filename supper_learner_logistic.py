@@ -1,8 +1,8 @@
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import Ridge, RidgeCV, Lasso, LassoCV, ElasticNetCV, LogisticRegressionCV
 from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
-from sklearn.linear_model import Ridge, RidgeCV, Lasso, LassoCV, ElasticNetCV
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import r2_score
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
+
 from sklearn.preprocessing import StandardScaler
 
 import matplotlib.pyplot as plt
@@ -11,11 +11,19 @@ from numpy.linalg import inv
 
 import pandas as pd
 import numpy as np
+import torch
 from pathlib import Path
+from torch.utils.data import Dataset, DataLoader
+from torch.autograd import Variable
+import torch.optim as optim
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision import models
 import random
 
 
 from pmlb import fetch_data, regression_dataset_names
+
 
 def random_assignments(train_X, K=6):
     data = {'index': range(len(train_X)), 'group':  np.random.choice(K, len(train_X)) }
@@ -46,19 +54,36 @@ class BaseModel:
         return ElasticNetCV(cv=5, random_state=0, l1_ratio=1)
 
     def model_4(self):
-        return DecisionTreeRegressor(max_depth=3)
+        return DecisionTreeRegressor(max_depth=4, max_features=0.9)
 
     def model_5(self):
-        return DecisionTreeRegressor(max_depth=4)
+        return DecisionTreeRegressor(max_depth=5, max_features=0.9)
 
     def model_6(self):
-        return DecisionTreeRegressor(max_depth=5)
+        return DecisionTreeRegressor(max_depth=6, max_features=0.9)
+
+
+# In[22]:
+
+
+def create_base_model(train_X, train_y, m_type):
+    N = train_X.shape[0]
+    n = int(2.5*N/np.log(N))
+    ind = np.random.choice(N, n, replace=False)
+    X = train_X[ind]
+    y = train_y[ind]
+    base_model = BaseModel(m_type)
+    base_model.model.fit(X, y)
+    return base_model
+
+
+# In[23]:
 
 
 def fit_initial_K_models(train_X, train_y, model_types):
     models = []
     N = train_X.shape[0]
-    n = int(2.5*N/np.log(N))
+    n = int(3*N/np.log(N))
     for k in range(len(model_types)):
         ind = np.random.choice(N, n, replace=False)
         X = train_X[ind]
@@ -69,17 +94,41 @@ def fit_initial_K_models(train_X, train_y, model_types):
             models.append(base_model)
     return models
 
-def fit_K_models(train_X, train_y, groups, model_types, K=6):
+
+# In[24]:
+
+
+alphas=[1e-4, 1e-3, 1e-2, 1e-1, 1, 2, 4, 8, 16, 32, 64, 132]
+
+def fit_K_models(train_X, train_y, oracle, models, K, p=0.8):
+    # sample to address overfitting 
+    N = train_X.shape[0]
+    ind = np.random.choice(N, int(p*N), replace=False)
+    X = train_X[ind]
+    y = train_y[ind]
+    # assigning points using oracle
+    # this will be modified 
+    groups = assign_points(X, oracle)
+                
+    if len(groups.group.unique()) < K:
+        groups, models = relabel_groups(groups, models)
+        K = len(groups.group.unique())
+        
+    model_types = [m.model_type for m in models]
     models = []
-    for k in range(K):
+    for k in range(len(model_types)):
         ind = groups[groups["group"] == k].index.values
-        X = train_X[ind]
-        y = train_y[ind]
+        X_k = X[ind]
+        y_k = y[ind]
         if len(ind) > 10:
             base_model = BaseModel(model_types[k])
-            base_model.model.fit(X, y)
+            base_model.model.fit(X_k, y_k)
             models.append(base_model)
     return models
+
+
+# In[25]:
+
 
 def compute_K_model_loss(train_X, train_y, models):
     L = []
@@ -89,6 +138,10 @@ def compute_K_model_loss(train_X, train_y, models):
     L = np.array(L)
     return L
 
+
+# In[26]:
+
+
 def compute_weights(L, K):
     JI_K = inv(np.ones((K, K)) - np.identity(K))
     W = []
@@ -97,17 +150,26 @@ def compute_weights(L, K):
         W.append(w_i)
     return np.array(W)
 
-def create_extended_dataset(train_X, train_y, models):
+
+# In[27]:
+
+
+def create_extended_dataset(train_X, train_y, models, p=0.7):
+    # sample to address overfitting
     K = len(models)
     N = train_X.shape[0]
-    L = compute_K_model_loss(train_X, train_y, models)
+    n = int(p*N)
+    idx = np.random.choice(N, n, replace=False)
+    X = train_X[idx]
+    Y = train_y[idx]
+    L = compute_K_model_loss(X, Y, models)
     W = compute_weights(L, K)
     X_ext = []
     y_ext = []
     w_ext = []
     for i in range(K):
-        X_ext.append(train_X.copy())
-        y_ext.append(i*np.ones(N))
+        X_ext.append(X.copy())
+        y_ext.append(i*np.ones(n))
         w_ext.append(W[:, i])
     X_ext = np.concatenate(X_ext, axis=0)
     y_ext = np.concatenate(y_ext, axis=0)
@@ -115,23 +177,42 @@ def create_extended_dataset(train_X, train_y, models):
     return X_ext, y_ext, w_ext
 
 
-def find_optimal_max_depth(X, y):
-    N = X.shape[1]
-    max_depth = np.unique([int(x*N + 1) for x in np.linspace(0.01, 2, num = 5)])
-    grid = {'max_depth': max_depth}
-    dt = DecisionTreeRegressor(min_samples_leaf=10)
-    dt_cv = GridSearchCV(estimator = dt, param_grid = grid, cv = 5, verbose=2,
-                         n_jobs = 20)
-    dt_cv.fit(X, y)
-    return dt_cv.best_params_["max_depth"]
+# ## Neural Network oracle
+
+# In[28]:
 
 
-def fit_tree_oracle_model(X, y, w, max_depth):
-    dtc = DecisionTreeClassifier(max_depth=max_depth)
-    dtc.fit(X, y, sample_weight=w)
-    return dtc
+def create_oracle_model(D_in, K, N):
+    """ Returns an oracle model
+    
+    The size of the hidden layer is a function of the
+    amount of training data
+    """
+    H = np.minimum(int(2*np.log(N)**2), 150)
+    model = nn.Sequential(
+        nn.Linear(D_in, H),
+        nn.BatchNorm1d(H),
+        nn.ReLU(),
+        torch.nn.Linear(H, K))
+    return model
 
-def reasign_points(X, model):
+
+def softmax_loss(beta, f_hat, y, w):
+    y_hat = np.exp(beta*f_hat)
+    den = (np.exp(beta*f_hat)).sum(axis=1)
+    y_hat = np.array([y_hat[i]/den[i] for i in range(len(den))])
+    loss = w*((y * (1- y_hat)).sum(axis=1))
+    return loss.mean()
+
+
+def bounded_loss(beta, y_hat, y , w):
+    #y_hat = beta*y_hat
+    y_hat = F.softmax(y_hat, dim=1)
+    loss = (y*(1-y_hat)).sum(dim=1)
+    return (w*loss).mean()
+
+
+def assign_points(X, model):
     y_hat = model.predict(X).astype(int)
     data = {'index': range(len(X)), 'group': y_hat}
     return pd.DataFrame(data)
@@ -140,11 +221,16 @@ def reasign_points(X, model):
 def relabel_groups(groups, models):
     unique_models = groups.group.unique()
     old2new = {x:i for i,x in enumerate(unique_models)}
-    ratios = []
-    model_types = [models[i].model_type for i in unique_models]
+    model_subset = [models[i] for i in unique_models]
     groups.group = np.array([old2new[x] for x in groups.group.values])
-    return groups, model_types
+    return groups, model_subset
 
+from sklearn.metrics import r2_score
+
+def fit_tree_oracle_model(X, y, w, max_depth):
+    dtc = DecisionTreeClassifier(max_depth=max_depth)
+    dtc.fit(X, y, sample_weight=w)
+    return dtc
 
 def compute_loss(X, y, oracle, models):
     y_hat = oracle.predict(X)
@@ -163,26 +249,8 @@ def compute_loss(X, y, oracle, models):
     res = (ys - preds)**2
     return res.mean(), r2
 
-def softmax_loss(beta, f_hat, y, w):
-    y_hat = np.exp(beta*f_hat)
-    den = (np.exp(beta*f_hat)).sum(axis=1)
-    y_hat = np.array([y_hat[i]/den[i] for i in range(len(den))])
-    loss = w*((y * (1- y_hat)).sum(axis=1))
-    return loss.mean()
 
-def bounded_loss(beta, y_hat, y , w):
-    #y_hat = beta*y_hat
-    y_hat = F.softmax(y_hat, dim=1)
-    loss = (y*(1-y_hat)).sum(dim=1)
-    return (w*loss).mean()
-
-
-def relabel_groups(groups, models):
-    unique_models = groups.group.unique()
-    old2new = {x:i for i,x in enumerate(unique_models)}
-    model_subset = [models[i] for i in unique_models]
-    groups.group = np.array([old2new[x] for x in groups.group.values])
-    return groups, model_subset, [m.model_type for m in model_subset]
+# In[37]:
 
 
 def compute_single_loss(X, y, model):
@@ -190,6 +258,9 @@ def compute_single_loss(X, y, model):
     r2 = r2_score(y, pred)
     res = (y - pred)**2
     return res.mean(), r2
+
+
+# In[38]:
 
 
 def baseline_models(train_X, train_y, valid_X, valid_y):
@@ -207,30 +278,26 @@ def baseline_models(train_X, train_y, valid_X, valid_y):
     return best_valid_r2, best_model, [best_model_type]
 
 
-#############################
-# Main loop
-############################
-list_dataset = []
-model_str = ["RF", "Ridge", "Lasso", "DT"]
+# ## Main 
+
+# In[41]:
 
 
-#"1191_BNG_pbc", too expensive, leaving outside for now
-# "1196_BNG_pharynx"
-selected_datasets = ["1028_SWD", "1029_LEV", "1199_BNG_echoMonths", "1201_BNG_breastTumor",
-        "1595_poker", "201_pol", "218_house_8L", "225_puma8NH", "294_satellite_image", "537_houses",
-        "564_fried", "573_cpu_act", "574_house_16H", "1191_BNG_pbc", "1196_BNG_pharynx"]
+def get_datatest_split(dataset, state):
+    X, y = fetch_data(dataset, return_X_y=True, local_cache_dir='/data2/yinterian/pmlb/')
+    train_X, test_X, train_y, test_y = train_test_split(X, y, random_state=state, test_size = 0.2)
+    valid_X, test_X, valid_y, test_y = train_test_split(test_X, test_y, random_state=state, test_size =0.5)
+    scaler = StandardScaler()
+    train_X = scaler.fit_transform(train_X)
+    test_X = scaler.transform(test_X)
+    valid_X = scaler.transform(valid_X)
+    return train_X, valid_X, test_X, train_y, valid_y, test_y
 
 
-def main_loop(state):
+
+def main_loop(state, selected_datasets):
     for dataset in selected_datasets:
-        X, y = fetch_data(dataset, return_X_y=True, local_cache_dir='/data2/yinterian/pmlb/')
-        train_X, test_X, train_y, test_y = train_test_split(X, y, random_state=state, test_size = 0.2)
-        valid_X, test_X, valid_y, test_y = train_test_split(test_X, test_y, random_state=state, test_size =0.5)
-        scaler = StandardScaler()
-        train_X = scaler.fit_transform(train_X)
-        test_X = scaler.transform(test_X)
-        valid_X = scaler.transform(valid_X)
-        max_depth = find_optimal_max_depth(train_X, train_y)
+        train_X, valid_X, test_X, train_y, valid_y, test_y = get_datatest_split(dataset, state)
 
         best_valid_r2, best_model, best_model_types = baseline_models(train_X, train_y, valid_X, valid_y)
         best_test_r2 = best_model.score(test_X, test_y)
@@ -238,49 +305,39 @@ def main_loop(state):
         best_oracle = None
         best_models = [best_model] 
 
-        K = 6
-        groups = random_assignments(train_X, K)
-
-        batch_size = 100000
-        # number of iterations depends on the number of training points
         N = train_X.shape[0]
-        N_iter = int(3000/np.log(N)**2)
-        print("Number of training points %d, number iterations %d" % (N, N_iter))
+        print("Number of training points %d" % (N))
 
-        model_types = [x for x in range(1,7)]
-        model_types = model_types + [1,2,3,6,6,6]
-        K = len(model_types)
         INIT_FLAG = True
+        oracle = None
         for i in range(16):
             if i == 8: INIT_FLAG = True
-            print("Iteration %d K is %d" % (i+1, K))
+            
+            if not INIT_FLAG:
+                models = fit_K_models(train_X, train_y, oracle, models, K, p=0.9)
+                if len(models) == 1:
+                    INIT_FLAG = True  
+            
             if INIT_FLAG:
-                model_types = [x for x in range(1,7)] + [1,3,6,6,6]
+                model_types = [x for x in range(1,7)] + [1,3,6,6,6,6,6,6]
                 models = fit_initial_K_models(train_X, train_y, model_types)
                 INIT_FLAG = False
-            else:
-                models = fit_K_models(train_X, train_y, groups, model_types, K)
+            
             K = len(models)
+            print("Iteration %d K is %d" % (i+1, K))
             if K == 1:
                 INIT_FLAG = True
 
             if not INIT_FLAG:
-                X_ext, y_ext, w_ext = create_extended_dataset(train_X, train_y, models)
-                oracle = fit_tree_oracle_model(X_ext, y_ext, w_ext, max_depth)
-            
-            groups = reasign_points(train_X, oracle)
-            if len(groups.group.unique()) == 1:
-                INIT_FLAG = True
+                X_ext, y_ext, w_ext = create_extended_dataset(train_X, train_y, models, p=0.9)
+                #oracle = fit_tree_oracle_model(X_ext, y_ext, w_ext, max_depth=6)
+                oracle = fit_lr_oracle_model(X_ext, y_ext, w_ext)
             
             if not INIT_FLAG:
                 train_loss, train_r2 = compute_loss(train_X, train_y, oracle, models)
                 valid_loss, valid_r2 = compute_loss(valid_X, valid_y, oracle, models)
                 test_loss, test_r2 = compute_loss(test_X, test_y, oracle, models)
 
-            if len(groups.group.unique()) < K:
-                groups, models, model_types = relabel_groups(groups, models)
-                K = len(groups.group.unique())
-                print(len(models), len(model_types), K)
 
             print("train loss %.3f valid loss %.3f", train_loss, valid_loss)
             print("train R^2 %.3f valid R^2 %.3f", train_r2, valid_r2)
@@ -289,7 +346,7 @@ def main_loop(state):
                 best_valid_r2 = valid_r2
                 best_K = K
                 best_models = models
-                best_model_types = model_types
+                best_model_types = [m.model_type for m in models]
                 best_test_r2 = test_r2 
         
         results = "dataset %s state %d K %d test ISL %.3f valid ISL %.3f model_types %s" % (
@@ -299,7 +356,13 @@ def main_loop(state):
         f.write('\n')
         f.flush()
 
-f = open('out_tree.log', 'w+')
+
+selected_datasets = ["294_satellite_image", "201_pol", "1199_BNG_echoMonths", "1201_BNG_breastTumor", "218_house_8L",
+        "225_puma8NH", "537_houses", "564_fried", "573_cpu_act", "574_house_16H"]
+
+f = open('out_logistic.log', 'w+')
 for state in range(1, 11):
-    main_loop(state)
+    main_loop(state, selected_datasets)
 f.close()
+
+
