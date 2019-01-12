@@ -79,26 +79,27 @@ def fit_initial_K_models(train_X, train_y, model_types):
 def fit_K_models(train_X, train_y, oracle, models, K, p=0.8):
     # sample to address overfitting 
     N = train_X.shape[0]
-    ind = np.random.choice(N, int(p*N), replace=False)
+    n = int(p*N)
+    ind = np.random.choice(N, n, replace=False)
     X = train_X[ind]
     y = train_y[ind]
     # assigning points using oracle
-    # this will be modified 
-    groups = assign_points(X, oracle)
-                
-    if len(groups.group.unique()) < K:
-        groups, models = relabel_groups(groups, models)
-        K = len(groups.group.unique())
-        
+    x = torch.tensor(X).float()
+    y_hat = oracle(x.cuda())
+    W = F.softmax(0.1*y_hat).cpu().detach().numpy()           
+    
+
     model_types = [m.model_type for m in models]
     models = []
     for k in range(len(model_types)):
-        ind = groups[groups["group"] == k].index.values
-        X_k = X[ind]
-        y_k = y[ind]
-        if len(ind) > 10:
+        w = W[:,k]
+        if w.sum()/n > 0.01:
+            idx = w > 0.0000000001
+            w = W[idx, k].copy()
+            X_k = X[idx]
+            y_k = y[idx]
             base_model = BaseModel(model_types[k])
-            base_model.model.fit(X_k, y_k)
+            base_model.model.fit(X_k, y_k, w)
             models.append(base_model)
     return models
 
@@ -298,16 +299,22 @@ selected_datasets = ["1028_SWD", "1029_LEV", "1199_BNG_echoMonths", "1201_BNG_br
 selected_datasets = ["294_satellite_image", "201_pol", "1199_BNG_echoMonths", "1201_BNG_breastTumor", "218_house_8L",
         "225_puma8NH", "537_houses", "564_fried", "573_cpu_act", "574_house_16H"]
 
+
+def get_datatest_split(dataset, state):
+    X, y = fetch_data(dataset, return_X_y=True, local_cache_dir='/data2/yinterian/pmlb/')
+    train_X, test_X, train_y, test_y = train_test_split(X, y, random_state=state, test_size = 0.3)
+    valid_X, test_X, valid_y, test_y = train_test_split(test_X, test_y, random_state=state, test_size =0.5)
+    scaler = StandardScaler()
+    train_X = scaler.fit_transform(train_X)
+    test_X = scaler.transform(test_X)
+    valid_X = scaler.transform(valid_X)
+    return train_X, valid_X, test_X, train_y, valid_y, test_y
+
+
 def main_loop(state):
     for dataset in selected_datasets:
         learning_rate = lr_map.get(dataset, 0.15)
-        X, y = fetch_data(dataset, return_X_y=True, local_cache_dir='/data2/yinterian/pmlb/')
-        train_X, test_X, train_y, test_y = train_test_split(X, y, random_state=state, test_size = 0.2)
-        valid_X, test_X, valid_y, test_y = train_test_split(test_X, test_y, random_state=state, test_size =0.5)
-        scaler = StandardScaler()
-        train_X = scaler.fit_transform(train_X)
-        test_X = scaler.transform(test_X)
-        valid_X = scaler.transform(valid_X)
+        train_X, valid_X, test_X, train_y, valid_y, test_y = get_datatest_split(dataset, state)
 
         best_valid_r2, best_model, best_model_types = baseline_models(train_X, train_y, valid_X, valid_y)
         best_test_r2 = best_model.score(test_X, test_y)
@@ -371,7 +378,7 @@ def main_loop(state):
         f.write('\n')
         f.flush()
 
-f = open('out3kH150_6_sample_ext.log', 'w+')
+f = open('out3kH150_weighted.log', 'w+')
 for state in range(1, 11):
     main_loop(state)
 f.close()
