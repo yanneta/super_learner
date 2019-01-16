@@ -232,6 +232,11 @@ def fit_tree_oracle_model(X, y, w, max_depth):
     dtc.fit(X, y, sample_weight=w)
     return dtc
 
+def fit_lr_oracle_model(X, y, w):
+    lrc = LogisticRegressionCV(cv=5, random_state=0, multi_class='multinomial', n_jobs=5)
+    lrc.fit(X, y, sample_weight=w)
+    return lrc
+
 def compute_loss(X, y, oracle, models):
     y_hat = oracle.predict(X)
     preds = []
@@ -276,11 +281,6 @@ def baseline_models(train_X, train_y, valid_X, valid_y):
             best_model_type = k
             best_model = base_model.model
     return best_valid_r2, best_model, [best_model_type]
-
-
-# ## Main 
-
-# In[41]:
 
 
 def get_datatest_split(dataset, state):

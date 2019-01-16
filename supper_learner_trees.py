@@ -318,8 +318,8 @@ def main_loop(state, selected_datasets):
 
         INIT_FLAG = True
         oracle = None
-        for i in range(16):
-            if i == 8: INIT_FLAG = True
+        for i in range(20):
+            if i % 5 == 4: INIT_FLAG = True
             
             if not INIT_FLAG:
                 models = fit_K_models(train_X, train_y, oracle, models, K, p=0.9)
@@ -327,7 +327,8 @@ def main_loop(state, selected_datasets):
                     INIT_FLAG = True  
             
             if INIT_FLAG:
-                model_types = [x for x in range(1,7)] + [1,3,6,6,6,6,6,6]
+                model_types = [x for x in range(1,7)] + [1,2,3,1,2,3]
+                model_types = [1,2,3,1,2,3]
                 models = fit_initial_K_models(train_X, train_y, model_types)
                 INIT_FLAG = False
             
@@ -368,7 +369,7 @@ def main_loop(state, selected_datasets):
 selected_datasets = ["294_satellite_image", "201_pol", "1199_BNG_echoMonths", "1201_BNG_breastTumor", "218_house_8L",
         "225_puma8NH", "537_houses", "564_fried", "573_cpu_act", "574_house_16H"]
 
-f = open('out_trees.log', 'w+')
+f = open('out_trees_extreme_linear.log', 'w+')
 for state in range(1, 11):
     main_loop(state, selected_datasets)
 f.close()

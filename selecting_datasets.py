@@ -65,13 +65,13 @@ selected_datasets = ["1028_SWD", "1199_BNG_echoMonths", "1201_BNG_breastTumor",
         "1595_poker", "201_pol", "218_house_8L", "225_puma8NH", "294_satellite_image", "537_houses",
         "564_fried", "573_cpu_act", "574_house_16H"]
 
-selected_datasets = ["1191_BNG_pbc", "1196_BNG_pharynx"] 
+#selected_datasets = ["1191_BNG_pbc", "1196_BNG_pharynx"] 
 
-f = open('comparison-10-percent-extra.log', 'w+')
+f = open('comparison-15-percent.log', 'w+')
 for state in range(1,11):
     for dataset in selected_datasets:
         X, y = fetch_data(dataset, return_X_y=True, local_cache_dir='/data2/yinterian/pmlb/')
-        train_X, test_X, train_y, test_y = train_test_split(X, y, random_state=state, test_size = 0.2)
+        train_X, test_X, train_y, test_y = train_test_split(X, y, random_state=state, test_size = 0.3)
         valid_X, test_X, valid_y, test_y = train_test_split(test_X, test_y, random_state=state, test_size =0.5)
         scaler = StandardScaler()
         train_X = scaler.fit_transform(train_X)

@@ -75,8 +75,7 @@ def fit_initial_K_models(train_X, train_y, model_types):
             models.append(base_model)
     return models
 
-
-def fit_K_models(train_X, train_y, oracle, models, K, p=0.8):
+def fit_K_models(train_X, train_y, oracle, models, p=0.8):
     # sample to address overfitting 
     N = train_X.shape[0]
     n = int(p*N)
@@ -84,21 +83,22 @@ def fit_K_models(train_X, train_y, oracle, models, K, p=0.8):
     X = train_X[ind]
     y = train_y[ind]
     # assigning points using oracle
+    # this will be modified 
     x = torch.tensor(X).float()
     y_hat = oracle(x.cuda())
-    W = F.softmax(0.1*y_hat).cpu().detach().numpy()           
-    
-
+    W = F.softmax(0.5*y_hat, dim=1).cpu().detach().numpy()
+                
     model_types = [m.model_type for m in models]
     models = []
     for k in range(len(model_types)):
         w = W[:,k]
-        if w.sum()/n > 0.01:
-            idx = w > 0.0000000001
-            w = W[idx, k].copy()
+        if w.sum()/n > 0.015:
+            idx = w > 0.000001
+            w = W[idx, k].copy() 
             X_k = X[idx]
             y_k = y[idx]
             base_model = BaseModel(model_types[k])
+            print("model_type=", model_types[k], k)
             base_model.model.fit(X_k, y_k, w)
             models.append(base_model)
     return models
@@ -296,8 +296,8 @@ selected_datasets = ["1028_SWD", "1029_LEV", "1199_BNG_echoMonths", "1201_BNG_br
         "1595_poker", "201_pol", "218_house_8L", "225_puma8NH", "294_satellite_image", "537_houses",
         "564_fried", "573_cpu_act", "574_house_16H", "1191_BNG_pbc", "1196_BNG_pharynx"]
 
-selected_datasets = ["294_satellite_image", "201_pol", "1199_BNG_echoMonths", "1201_BNG_breastTumor", "218_house_8L",
-        "225_puma8NH", "537_houses", "564_fried", "573_cpu_act", "574_house_16H"]
+#selected_datasets = [ "1199_BNG_echoMonths", "294_satellite_image", "201_pol", "1201_BNG_breastTumor", "218_house_8L",
+#        "225_puma8NH", "537_houses", "564_fried", "573_cpu_act", "574_house_16H"]
 
 
 def get_datatest_split(dataset, state):
@@ -335,12 +335,13 @@ def main_loop(state):
             if i == 7: INIT_FLAG = True
             
             if not INIT_FLAG:
-                models = fit_K_models(train_X, train_y, oracle, models, K, p=0.9)
+                models = fit_K_models(train_X, train_y, oracle, models, p=0.9)
                 if len(models) == 1:
                     INIT_FLAG = True  
             
             if INIT_FLAG:
-                model_types = [x for x in range(1,7)] + [1,3,6,6,6,6,6,6]
+                #model_types = [x for x in range(1,7)] + [1,3,6,6,6,6,6,6]
+                model_types = [1,1,1,4,5,6,6,6,6,6]
                 models = fit_initial_K_models(train_X, train_y, model_types)
                 INIT_FLAG = False
             
@@ -378,7 +379,7 @@ def main_loop(state):
         f.write('\n')
         f.flush()
 
-f = open('out3kH150_weighted.log', 'w+')
+f = open('outWeighted_05.log', 'w+')
 for state in range(1, 11):
     main_loop(state)
 f.close()
