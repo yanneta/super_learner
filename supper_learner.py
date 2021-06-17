@@ -14,7 +14,6 @@ import numpy as np
 import torch
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
-from torch.autograd import Variable
 import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
@@ -103,10 +102,12 @@ def fit_K_models(train_X, train_y, oracle, models, p=0.8):
             models.append(base_model)
     return models
 
-def compute_K_model_loss(train_X, train_y, models):
+def compute_K_model_loss(X, y, models):
     L = []
     for i in range(len(models)):
-        loss = (models[i].model.predict(train_X) - train_y)**2
+        y_hat = models[i].model.predict_proba(X)
+        W = np.eye(y_hat.shape[1])[y] # to avoild the need for num_classes
+        loss = (-np.log(y_hat + 1e-8)*W).sum(1)
         L.append(loss)
     L = np.array(L)
     return L
@@ -172,7 +173,7 @@ def bounded_loss(beta, y_hat, y , w):
 
 def train_model(model, train_dl, K, learning_rate = 0.01, epochs=100):
     beta = 1
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=0.00001)
     KK = epochs//10 + 1
     model.train()
     for t in range(epochs):
@@ -280,25 +281,17 @@ def baseline_models(train_X, train_y, valid_X, valid_y):
 list_dataset = []
 model_str = ["RF", "Ridge", "Lasso", "DT"]
 
-
-lr_map = {"1028_SWD": 0.15, "1029_LEV" :0.15, "1030_ERA": 0.15, "1191_BNG_pbc": 0.02,
-         "1193_BNG_lowbwt": 0.1, "1196_BNG_pharynx": 0.015, "1199_BNG_echoMonths": 0.3,
-         "1203_BNG_pwLinear": 0.05, "1595_poker": 0.01, "1201_BNG_breastTumor": 0.05, "197_cpu_act": 0.2,
-         "201_pol": 0.15, "215_2dplanes": 0.1, "218_house_8L": 0.05, "225_puma8NH": 0.15,
-         "227_cpu_small":0.15, "294_satellite_image": 0.15, "344_mv": 0.1,
-          "4544_GeographicalOriginalofMusic": 0.15, "503_wind": 0.1, "529_pollen": 0.1,
-         "537_houses": 0.15, "562_cpu_small": 0.15, "564_fried": 0.1, "573_cpu_act": 0.15,
-         "574_house_16H": 0.15}
-
 #"1191_BNG_pbc", too expensive, leaving outside for now
 # "1196_BNG_pharynx"
 selected_datasets = ["1028_SWD", "1029_LEV", "1199_BNG_echoMonths", "1201_BNG_breastTumor",
         "1595_poker", "201_pol", "218_house_8L", "225_puma8NH", "294_satellite_image", "537_houses",
         "564_fried", "573_cpu_act", "574_house_16H", "1191_BNG_pbc", "1196_BNG_pharynx"]
 
-#selected_datasets = [ "1199_BNG_echoMonths", "294_satellite_image", "201_pol", "1201_BNG_breastTumor", "218_house_8L",
-#        "225_puma8NH", "537_houses", "564_fried", "573_cpu_act", "574_house_16H"]
-
+selected_datasets = []
+for dataset in regression_dataset_names:
+    X, y = fetch_data(dataset, return_X_y=True, local_cache_dir='/data2/yinterian/pmlb/')
+    if X.shape[0] >= 2000 and X.shape[0] <=500000:
+        selected_datasets.append(dataset)
 
 def get_datatest_split(dataset, state):
     X, y = fetch_data(dataset, return_X_y=True, local_cache_dir='/data2/yinterian/pmlb/')
@@ -313,11 +306,12 @@ def get_datatest_split(dataset, state):
 
 def main_loop(state):
     for dataset in selected_datasets:
-        learning_rate = lr_map.get(dataset, 0.15)
+        learning_rate = 0.15
         train_X, valid_X, test_X, train_y, valid_y, test_y = get_datatest_split(dataset, state)
 
         best_valid_r2, best_model, best_model_types = baseline_models(train_X, train_y, valid_X, valid_y)
         best_test_r2 = best_model.score(test_X, test_y)
+        best_single_model = best_test_r2 
         print("best valid R^2 %.3f best model type %d" % (best_valid_r2, best_model_types[0]))
         best_oracle = None
         best_models = [best_model] 
@@ -372,14 +366,14 @@ def main_loop(state):
                 best_model_types = [m.model_type for m in models]
                 best_test_r2 = test_r2 
         
-        results = "dataset %s state %d K %d test ISL %.3f valid ISL %.3f model_types %s" % (
-                dataset, state, len(best_models), best_test_r2, best_valid_r2, str(best_model_types))
+        results = "dataset %s state %d K %d test ISL %.3f valid ISL %.3f test base model %.3f model_types %s" % (
+                dataset, state, len(best_models), best_test_r2, best_valid_r2, best_single_model, str(best_model_types))
         print(results)
         f.write(results)
         f.write('\n')
         f.flush()
 
-f = open('outWeighted_05.log', 'w+')
+f = open('results-july-11-2019-weight-dacay.log', 'w+')
 for state in range(1, 11):
     main_loop(state)
 f.close()
